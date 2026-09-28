@@ -2157,57 +2157,256 @@ class HashBreakModern:
 
     # ============ TOOLKIT: PASSWORD STRENGTH ============
     def tool_password_strength(self):
-        width = 66
+        width = 70
         print()
         print(box_top(width))
-        print(box_line(f"{C.BOLD}PASSWORD STRENGTH CHECKER{C.RESET}", width, align='center'))
+        print(box_line(f"{C.BOLD}PASSWORD STRENGTH ANALYZER{C.RESET}", width, align='center'))
+        print(box_mid(width))
+        print(box_line(f"{C.DIM}checks patterns · wordlists · leet · keyboard rows · dates{C.RESET}", width))
         print(box_bottom(width))
         print()
+
         pw = input(f"  {C.CYAN}password{C.RESET} ❯ ")
         if not pw:
             print(f"  {C.YELLOW}no password{C.RESET}")
             return
 
-        # entropy estimate
-        charset = 0
-        if any(c.islower() for c in pw): charset += 26
-        if any(c.isupper() for c in pw): charset += 26
-        if any(c.isdigit() for c in pw): charset += 10
-        if any(not c.isalnum() for c in pw): charset += 33
-        import math
-        entropy = len(pw) * math.log2(charset) if charset > 0 else 0
-
-        # wordlist check
-        in_wordlist = False
-        words = self.load_wordlist()
-        if pw in words or pw.lower() in [w.lower() for w in words[:200000]]:
-            in_wordlist = True
-
         print()
-        print(f"  {C.CYAN}length{C.RESET}     {len(pw)}")
-        print(f"  {C.CYAN}charset{C.RESET}    {charset} symbols")
-        print(f"  {C.CYAN}entropy{C.RESET}    {entropy:.1f} bits")
+        findings = []   # list of (icon, level, message)
+        score_penalty = 0
 
-        if in_wordlist:
-            print(f"  {C.BRIGHT_RED}⚠ found in wordlist — common password{C.RESET}")
+        # ---------- length ----------
+        L = len(pw)
+        if L < 8:
+            findings.append(("✗", "high", f"too short ({L} chars) — minimum 12 recommended"))
+            score_penalty += 40
+        elif L < 12:
+            findings.append(("!", "med", f"length {L} — 12+ recommended"))
+            score_penalty += 15
         else:
-            print(f"  {C.BRIGHT_GREEN}✓ not in top wordlist{C.RESET}")
+            findings.append(("✓", "ok", f"length {L}"))
 
-        # rating
-        if in_wordlist or entropy < 30:
-            rating = f"{C.BRIGHT_RED}WEAK{C.RESET}"
-        elif entropy < 50:
+        # ---------- character classes ----------
+        classes = []
+        if any(c.islower() for c in pw): classes.append("lower")
+        if any(c.isupper() for c in pw): classes.append("upper")
+        if any(c.isdigit() for c in pw): classes.append("digit")
+        if any(not c.isalnum() for c in pw): classes.append("symbol")
+        if len(classes) >= 3:
+            findings.append(("✓", "ok", f"charset: {', '.join(classes)}"))
+        elif len(classes) == 2:
+            findings.append(("!", "med", f"only 2 char classes ({', '.join(classes)}) — add more"))
+            score_penalty += 10
+        else:
+            findings.append(("✗", "high", f"only 1 char class ({classes[0] if classes else 'none'})"))
+            score_penalty += 30
+
+        # ---------- wordlist check ----------
+        wl_hit = None
+        try:
+            wl = self.load_wordlist()
+            if pw in wl:
+                wl_hit = "exact match in wordlist"
+            elif pw.lower() in [w.lower() for w in wl[:200000]]:
+                wl_hit = "case-insensitive match in wordlist"
+        except Exception:
+            pass
+        if wl_hit:
+            findings.append(("✗", "high", f"found in wordlist ({wl_hit})"))
+            score_penalty += 60
+        else:
+            findings.append(("✓", "ok", "not in wordlist"))
+
+        # ---------- leet decode ----------
+        leet_map = {"@": "a", "4": "a", "0": "o", "1": "i", "3": "e", "5": "s",
+                    "$": "s", "7": "t", "8": "b", "!": "i", "+": "t"}
+        decoded = pw.lower()
+        for k, v in leet_map.items():
+            decoded = decoded.replace(k, v)
+        if decoded != pw.lower():
+            # check if the decoded version is a wordlist hit
+            try:
+                wl = self.load_wordlist()
+                if decoded in [w.lower() for w in wl[:200000]]:
+                    findings.append(("✗", "high", f"leet-speak decodes to wordlist word: {decoded}"))
+                    score_penalty += 40
+                else:
+                    findings.append(("!", "med", f"uses leet substitutions (decoded: {decoded})"))
+                    score_penalty += 10
+            except Exception:
+                pass
+
+        # ---------- reverse word ----------
+        if len(pw) >= 4:
+            rev = pw[::-1]
+            try:
+                wl = self.load_wordlist()
+                if rev.lower() in [w.lower() for w in wl[:200000]]:
+                    findings.append(("✗", "high", f"reversed wordlist hit: {rev}"))
+                    score_penalty += 40
+            except Exception:
+                pass
+
+        # ---------- keyboard rows ----------
+        rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm", "1234567890"]
+        pw_low = pw.lower()
+        for row in rows:
+            for span in range(3, min(len(pw_low), 6) + 1):
+                for i in range(len(row) - span + 1):
+                    chunk = row[i:i+span]
+                    if chunk in pw_low:
+                        findings.append(("✗", "high", f"keyboard pattern: {chunk!r}"))
+                        score_penalty += 25
+                        break
+                else:
+                    continue
+                break
+
+        # ---------- sequential ----------
+        seqs = ["abcdefghij", "0123456789"]
+        for seq in seqs:
+            for span in range(3, min(len(pw_low), 5) + 1):
+                for i in range(len(seq) - span + 1):
+                    chunk = seq[i:i+span]
+                    if chunk in pw_low or chunk[::-1] in pw_low:
+                        findings.append(("✗", "high", f"sequential pattern: {chunk!r}"))
+                        score_penalty += 25
+                        break
+                else:
+                    continue
+                break
+
+        # ---------- repeats ----------
+        if re.search(r'(.)\1{2,}', pw):
+            findings.append(("✗", "high", "repeated characters (3+ in a row)"))
+            score_penalty += 20
+        if re.search(r'(.+)\1+$', pw) and len(pw) >= 6:
+            findings.append(("!", "med", "ends with a repeat pattern"))
+            score_penalty += 10
+
+        # ---------- dates / years ----------
+        if re.search(r'(19|20)\d{2}', pw):
+            findings.append(("!", "med", "contains a year (19xx/20xx)"))
+            score_penalty += 15
+
+        # ---------- entropy ----------
+        import math
+        charset_size = 0
+        if any(c.islower() for c in pw): charset_size += 26
+        if any(c.isupper() for c in pw): charset_size += 26
+        if any(c.isdigit() for c in pw): charset_size += 10
+        if any(not c.isalnum() for c in pw): charset_size += 33
+        entropy = L * math.log2(charset_size) if charset_size else 0
+        # subtract pattern penalties from effective entropy
+        effective = max(0, entropy - score_penalty * 0.8)
+
+        # ---------- rating ----------
+        if effective < 30 or score_penalty >= 80:
+            rating = f"{C.BRIGHT_RED}{C.BOLD}WEAK{C.RESET}"
+        elif effective < 55 or score_penalty >= 50:
             rating = f"{C.YELLOW}MODERATE{C.RESET}"
-        elif entropy < 70:
+        elif effective < 75:
             rating = f"{C.BRIGHT_GREEN}STRONG{C.RESET}"
         else:
             rating = f"{C.BRIGHT_GREEN}{C.BOLD}VERY STRONG{C.RESET}"
 
+        # ---------- crack-time table ----------
+        def fmt_time(seconds):
+            if seconds < 1:
+                return f"{seconds * 1000:.1f} ms"
+            if seconds < 60:
+                return f"{seconds:.1f} s"
+            if seconds < 3600:
+                return f"{seconds / 60:.1f} min"
+            if seconds < 86400:
+                return f"{seconds / 3600:.1f} h"
+            if seconds < 86400 * 365:
+                return f"{seconds / 86400:.1f} days"
+            if seconds < 86400 * 365 * 1000:
+                return f"{seconds / (86400 * 365):.1f} years"
+            return f"{seconds / (86400 * 365):.2e} years"
+
+        # guesses = 2^effective
+        guesses = 2 ** effective if effective < 200 else float("inf")
+
+        # attack speeds (guesses/sec)
+        speeds = [
+            ("online (rate-limited)",        100),
+            ("offline · bcrypt",             10_000),
+            ("offline · scrypt",             100_000),
+            ("offline · NTLM (CPU)",         10_000_000),
+            ("offline · MD5 (GPU)",          10_000_000_000),
+            ("offline · MD5 (4× RTX 4090)",  640_000_000_000),
+        ]
+
+        # ---------- render ----------
+        print(f"  {C.BRIGHT_CYAN}{C.BOLD}ANALYSIS{C.RESET}")
         print()
-        print(f"  {C.CYAN}rating{C.RESET}     {rating}")
+        for icon, level, msg in findings:
+            color = {
+                "ok":   C.BRIGHT_GREEN,
+                "med":  C.YELLOW,
+                "high": C.BRIGHT_RED,
+            }[level]
+            mark = {"✓": f"{C.BRIGHT_GREEN}✓{C.RESET}",
+                    "!": f"{C.YELLOW}!{C.RESET}",
+                    "✗": f"{C.BRIGHT_RED}✗{C.RESET}"}[icon]
+            print(f"    {mark}  {color}{msg}{C.RESET}")
+
+        print()
+        print(f"  {C.CYAN}raw entropy{C.RESET}        {entropy:.1f} bits")
+        print(f"  {C.CYAN}effective entropy{C.RESET}  {effective:.1f} bits  {C.DIM}(after pattern penalties){C.RESET}")
+        print(f"  {C.CYAN}rating{C.RESET}            {rating}")
         print()
 
-    # ============ TOOLKIT: ENCODERS ============
+        print(f"  {C.BRIGHT_CYAN}{C.BOLD}ESTIMATED CRACK TIME{C.RESET}")
+        print()
+        if guesses == float("inf"):
+            print(f"    {C.BRIGHT_GREEN}effectively uncrackable in the foreseeable future{C.RESET}")
+        else:
+            for label, rate in speeds:
+                t = guesses / rate
+                color = C.BRIGHT_RED if t < 60 else C.YELLOW if t < 86400 else C.BRIGHT_GREEN
+                print(f"    {C.DIM}{label:<30}{C.RESET} {color}{fmt_time(t):>14}{C.RESET}")
+        print()
+
+        # ---------- suggestions ----------
+        if score_penalty >= 40 or effective < 55:
+            print(f"  {C.BRIGHT_CYAN}{C.BOLD}SUGGESTIONS{C.RESET}")
+            print()
+            suggestions = []
+            if any("wordlist" in m for _, _, m in findings):
+                suggestions.append("avoid words from any public wordlist")
+            if any("keyboard" in m for _, _, m in findings):
+                suggestions.append("avoid keyboard patterns (qwerty, asdfgh)")
+            if any("sequential" in m for _, _, m in findings):
+                suggestions.append("avoid sequences (abc, 123)")
+            if any("repeat" in m for _, _, m in findings):
+                suggestions.append("avoid repeated characters")
+            if any("year" in m for _, _, m in findings):
+                suggestions.append("avoid years (1900-2099)")
+            if L < 12:
+                suggestions.append(f"length ≥ 16 (yours: {L})")
+            if len(classes) < 3:
+                suggestions.append("mix upper/lower/digits/symbols")
+            if not suggestions:
+                suggestions.append("increase length — longer is almost always stronger")
+            for s in suggestions:
+                print(f"    {C.BRIGHT_YELLOW}→{C.RESET} {s}")
+            print()
+
+        # ---------- generate a strong replacement ----------
+        offer = input(f"  {C.CYAN}generate strong replacement?{C.RESET} [y/N] ❯ ").strip().lower()
+        if offer == 'y':
+            import secrets
+            alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+"
+            suggestion = "".join(secrets.choice(alphabet) for _ in range(20))
+            print()
+            print(f"  {C.BRIGHT_GREEN}{C.BOLD}{suggestion}{C.RESET}")
+            print(f"  {C.DIM}20 chars, 95-char alphabet, ~131 bits of entropy{C.RESET}")
+            print()
+
+
     def tool_encoders(self):
         width = 66
         print()
