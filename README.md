@@ -1,5 +1,7 @@
 # HashBreak Toolkit
 
+[![tests](https://github.com/temidev1/hashbreak-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/temidev1/hashbreak-toolkit/actions/workflows/tests.yml)
+
 Modern hash cracker + reconnaissance toolkit for Android / Termux.
 Built by Maverick.
 
