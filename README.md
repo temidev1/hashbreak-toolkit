@@ -27,6 +27,16 @@ Pick options 1-16 from the menu.
 
 20 real breached MD5 hashes cracked in 187 seconds. 100% success rate.
 
+
+## Contact
+
+- GitHub: [@temidev1](https://github.com/temidev1)
+- Issues: https://github.com/temidev1/hashbreak-toolkit/issues
+- Discussions: https://github.com/temidev1/hashbreak-toolkit/discussions
+
+For bug reports and feature requests, open an issue.
+For general questions, use Discussions.
+
 ## License
 
 MIT
