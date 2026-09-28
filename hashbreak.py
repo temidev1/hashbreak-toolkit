@@ -901,6 +901,96 @@ def probe_port(ip, port, timeout=2.0):
     return None
 
 
+
+
+# ============ TARGET VALIDATION (v7.10) ============
+
+import ipaddress as _ipaddress
+
+
+def is_private_ip(ip_str):
+    """return True if the IP is in an RFC 1918 / RFC 4193 private range."""
+    try:
+        ip = _ipaddress.ip_address(ip_str)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False
+
+
+def validate_domain(domain):
+    """return (ok, normalized, error_msg). Accepts hostnames only, no scheme."""
+    domain = (domain or "").strip().lower()
+    domain = re.sub(r'^https?://', '', domain).split('/')[0]
+    if not domain:
+        return (False, "", "empty domain")
+    if len(domain) > 253:
+        return (False, "", "domain too long")
+    # basic hostname check
+    label_re = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+    labels = domain.split('.')
+    if len(labels) < 2:
+        return (False, "", "must have at least one dot (e.g. example.com)")
+    for lbl in labels:
+        if not label_re.match(lbl):
+            return (False, "", f"invalid label: {lbl}")
+    return (True, domain, "")
+
+
+def validate_target(target):
+    """validate a host, IP, CIDR, or comma-list.
+    returns (ok, list_of_targets, error_msg)."""
+    if not target:
+        return (False, [], "empty target")
+    targets = expand_targets(target)
+    if not targets:
+        return (False, [], "no valid targets after expansion")
+    if len(targets) > 4096:
+        return (False, [], f"too many targets ({len(targets)}); max 4096")
+    return (True, targets, "")
+
+
+# confirmation helper — remembers "yes" for the session
+_CONFIRMED_PUBLIC = [False]
+_CONFIRMED_ONLINE = [False]
+
+
+def confirm_public_scan(target_desc):
+    """ask once per session before scanning a public target."""
+    if _CONFIRMED_PUBLIC[0]:
+        return True
+    print()
+    print(f"  {C.BRIGHT_YELLOW}⚠  WARNING{C.RESET}")
+    print(f"  {C.YELLOW}You are about to scan:{C.RESET} {target_desc}")
+    print(f"  {C.DIM}Only scan systems you own or have explicit permission to test.{C.RESET}")
+    print(f"  {C.DIM}Unauthorized scanning may violate laws, policies, or terms of service.{C.RESET}")
+    print()
+    ans = input(f"  {C.CYAN}continue?{C.RESET} [y/N, 'a' = always this session] ❯ ").strip().lower()
+    if ans == 'a':
+        _CONFIRMED_PUBLIC[0] = True
+        return True
+    return ans == 'y'
+
+
+def confirm_online_lookup(hash_str):
+    """ask once per session before sending a hash to a third-party lookup service."""
+    if _CONFIRMED_ONLINE[0]:
+        return True
+    if os.environ.get('HASHBREAK_OFFLINE'):
+        return False
+    print()
+    print(f"  {C.BRIGHT_YELLOW}⚠  ONLINE LOOKUP{C.RESET}")
+    print(f"  {C.YELLOW}This will send the hash to third-party services:{C.RESET}")
+    print(f"    {C.DIM}· md5.gromweb.com{C.RESET}")
+    print(f"    {C.DIM}· md5decrypt.net{C.RESET}")
+    print(f"  {C.DIM}Hashes are credentials. Only proceed if you're OK with that.{C.RESET}")
+    print()
+    ans = input(f"  {C.CYAN}continue?{C.RESET} [y/N, 'a' = always this session] ❯ ").strip().lower()
+    if ans == 'a':
+        _CONFIRMED_ONLINE[0] = True
+        return True
+    return ans == 'y'
+
+
 class HashBreakModern:
     def __init__(self):
         self.results = []
@@ -1337,9 +1427,10 @@ class HashBreakModern:
         if not hash_type:
             return None
         if hash_type in ('MD5', 'SHA1'):
-            result = self.online_lookup(hash_str)
-            if result:
-                return {'password': result, 'method': 'Online', 'type': hash_type}
+            if confirm_online_lookup(hash_str):
+                result = self.online_lookup(hash_str)
+                if result:
+                    return {'password': result, 'method': 'Online', 'type': hash_type}
         if hash_type == 'scrypt':
             result = self.crack_scrypt(hash_str)
             if result:
@@ -1386,6 +1477,21 @@ class HashBreakModern:
             print(f"  {C.YELLOW}no target{C.RESET}")
             return
 
+        # validate target
+        ok, targets_list, err = validate_target(target)
+        if not ok:
+            print(f"  {C.RED}❌ invalid target: {err}{C.RESET}")
+            return
+
+        # confirm if any target is not local
+        any_public = any(not is_private_ip(t) for t in targets_list if re.match(r'^\d+\.\d+\.\d+\.\d+$', t))
+        # for hostnames, assume public
+        if not any(re.match(r'^\d+\.\d+\.\d+\.\d+$', t) for t in targets_list):
+            any_public = True
+        if any_public and not confirm_public_scan(target):
+            print(f"  {C.YELLOW}scan cancelled{C.RESET}")
+            return
+
         print()
         print(f"  {C.CYAN}scan profile{C.RESET}")
         print(f"    {C.CYAN}[1]{C.RESET} top 100 ports       {C.DIM}-T4 (aggressive){C.RESET}")
@@ -1418,19 +1524,27 @@ class HashBreakModern:
             ports = TOP_PORTS
 
         print()
-        print(f"  {C.CYAN}timing{C.RESET}")
+        print(f"  {C.CYAN}timing{C.RESET}  {C.DIM}(aggressive profiles generate more traffic){C.RESET}")
         print(f"    {C.CYAN}[1]{C.RESET} T0 paranoid     {C.DIM}(5s timeout, 5 threads){C.RESET}")
         print(f"    {C.CYAN}[2]{C.RESET} T1 sneaky       {C.DIM}(3s timeout, 20 threads){C.RESET}")
         print(f"    {C.CYAN}[3]{C.RESET} T2 polite       {C.DIM}(2s timeout, 100 threads){C.RESET}")
-        print(f"    {C.CYAN}[4]{C.RESET} T3 normal       {C.DIM}(1.5s timeout, 300 threads){C.RESET}")
-        print(f"    {C.CYAN}[5]{C.RESET} T4 aggressive   {C.DIM}(1s timeout, 500 threads){C.RESET} {C.GREEN}← default{C.RESET}")
-        print(f"    {C.CYAN}[6]{C.RESET} T5 insane       {C.DIM}(0.5s timeout, 1000 threads){C.RESET}")
-        timing = input(f"  {C.CYAN}choice{C.RESET} [1-6, default 5] ❯ ").strip() or "5"
+        print(f"    {C.CYAN}[4]{C.RESET} T3 normal       {C.DIM}(1.5s timeout, 300 threads){C.RESET} {C.GREEN}← default{C.RESET}")
+        print(f"    {C.CYAN}[5]{C.RESET} T4 aggressive   {C.YELLOW}(1s timeout, 500 threads) — high traffic{C.RESET}")
+        print(f"    {C.CYAN}[6]{C.RESET} T5 insane       {C.BRIGHT_RED}(0.5s timeout, 1000 threads) — very high traffic{C.RESET}")
+        timing = input(f"  {C.CYAN}choice{C.RESET} [1-6, default 4] ❯ ").strip() or "4"
         timing_map = {
             '1': (5.0, 5), '2': (3.0, 20), '3': (2.0, 100),
             '4': (1.5, 300), '5': (1.0, 500), '6': (0.5, 1000)
         }
-        timeout_s, thread_count = timing_map.get(timing, (1.0, 500))
+        timeout_s, thread_count = timing_map.get(timing, (1.5, 300))
+
+        # extra confirmation for very aggressive timing
+        if timing in ('5', '6'):
+            print(f"  {C.YELLOW}⚠  timing profile {'T4' if timing == '5' else 'T5'} generates high traffic{C.RESET}")
+            confirm_agg = input(f"  {C.CYAN}continue?{C.RESET} [y/N, default y] ❯ ").strip().lower()
+            if confirm_agg == 'n':
+                print(f"  {C.YELLOW}scan cancelled{C.RESET}")
+                return
 
         ping_first = input(f"  {C.CYAN}ping sweep first to skip dead hosts?{C.RESET} [Y/n] ❯ ").strip().lower()
         do_ping = ping_first != 'n'
@@ -1617,7 +1731,14 @@ class HashBreakModern:
         if not domain:
             print(f"  {C.YELLOW}no domain{C.RESET}")
             return
-        domain = re.sub(r'^https?://', '', domain).split('/')[0]
+        ok, domain, err = validate_domain(domain)
+        if not ok:
+            print(f"  {C.RED}❌ invalid domain: {err}{C.RESET}")
+            return
+
+        if not confirm_public_scan(domain):
+            print(f"  {C.YELLOW}scan cancelled{C.RESET}")
+            return
 
         # check if real recon tools are available
         subfinder_ok = shutil.which('subfinder') is not None
@@ -1814,6 +1935,21 @@ class HashBreakModern:
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         base = url.rstrip('/')
+
+        # extract host and validate + confirm
+        try:
+            from urllib.parse import urlparse as _urlparse
+            host = _urlparse(base).hostname or ""
+            ok, host_norm, err = validate_domain(host)
+            if not ok:
+                print(f"  {C.RED}❌ invalid host: {err}{C.RESET}")
+                return
+            if not confirm_public_scan(host_norm):
+                print(f"  {C.YELLOW}scan cancelled{C.RESET}")
+                return
+        except Exception as e:
+            print(f"  {C.RED}❌ url parse error: {e}{C.RESET}")
+            return
 
         print()
         print(f"  {C.CYAN}target{C.RESET}   {base}")

@@ -15,7 +15,11 @@ Built by Maverick.
 ## Install
 
     pkg install python git -y
-    pip install requests bcrypt pycryptodome scrypt
+    pip install -r requirements.txt
+
+For reproducible installs (exact versions tested by the author):
+
+    pip install -r requirements.lock.txt
 
 ## Usage
 
@@ -25,7 +29,23 @@ Pick options 1-16 from the menu.
 
 ## Test result
 
-20 real breached MD5 hashes cracked in 187 seconds. 100% success rate.
+**Benchmark:** 20 real breached MD5 hashes from SecLists leaked-database samples.
+
+| | |
+|---|---|
+| Hardware | Android phone, Snapdragon 7-series, 8 cores |
+| Platform | Termux (Android 14) |
+| Python | 3.14 |
+| Hash type | MD5 |
+| Hashes | 20 |
+| Wordlist | top 100k rockyou + top 100k md5decryptor-uk |
+| Attack mode | dictionary (fast rules) |
+| Workers | 4 parallel single-core subprocesses |
+| **Time** | **186.93s** |
+| **Crack rate** | **100%** |
+
+Note: 100% is specific to this wordlist/dump pairing. Real-world rates vary
+with wordlist coverage, password strength, and hash type.
 
 
 ## Contact
