@@ -1,0 +1,12 @@
+*.txt
+!requirements.txt
+!wordlist.txt
+*.json
+*.csv
+*.xml
+*.log
+portscan_*
+subdomains_*
+hashbreak_modern_*
+__pycache__/
+*.pyc
