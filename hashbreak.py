@@ -991,6 +991,108 @@ def confirm_online_lookup(hash_str):
     return ans == 'y'
 
 
+
+
+# ============ HASHCAT BACKEND (v7.12) ============
+
+HASHCAT_AVAILABLE = None   # lazy — determined on first use
+
+
+def hashcat_available():
+    """recheck hashcat on PATH at runtime — and verify it has a working device.
+    returns True only if hashcat exists AND a test crack succeeds.
+    Can be force-disabled with HASHBREAK_NO_HASHCAT=1."""
+    global HASHCAT_AVAILABLE
+    if HASHCAT_AVAILABLE is not None:
+        return HASHCAT_AVAILABLE
+
+    # env var override — skip hashcat entirely
+    if os.environ.get("HASHBREAK_NO_HASHCAT"):
+        HASHCAT_AVAILABLE = False
+        return False
+
+    if shutil.which("hashcat") is None:
+        HASHCAT_AVAILABLE = False
+        return False
+
+    # test crack — MD5("test") with a 1-word list, hard timeout
+    try:
+        test_hash = "098f6bcd4621d373cade4e832627b4f6"  # md5("test")
+        test_wl = Path.home() / ".hashbreak_testwl.txt"
+        test_wl.write_text("test\n")
+        test_pot = Path.home() / ".hashbreak_test.potfile"
+        if test_pot.exists():
+            test_pot.unlink()
+        test_hf = Path.home() / ".hashbreak_testhash.txt"
+        test_hf.write_text(test_hash + "\n")
+
+        cmd = [
+            "hashcat", "-m", "0", "-a", "0",
+            "--quiet", "--restore-disable", "--force",
+            "--potfile-path", str(test_pot),
+            str(test_hf), str(test_wl),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        if test_pot.exists():
+            content = test_pot.read_text(errors="ignore")
+            if test_hash + ":test" in content:
+                HASHCAT_AVAILABLE = True
+                return True
+        HASHCAT_AVAILABLE = False
+        return False
+    except (subprocess.TimeoutExpired, Exception):
+        # hard cleanup — kill any lingering hashcat
+        try:
+            subprocess.run(["pkill", "-f", "hashcat"],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=3)
+        except Exception:
+            pass
+        HASHCAT_AVAILABLE = False
+        return False
+
+
+def hashcat_crack(hash_str, mode, wordlist_path, potfile=None):
+    """run hashcat against a single hash. returns password or None.
+    reads result from hashcat's potfile after the run."""
+    if not HASHCAT_AVAILABLE:
+        return None
+
+    hf = Path.home() / ".hashbreak_target.txt"
+    hf.write_text(hash_str + "\n")
+
+    if potfile is None:
+        potfile = Path.home() / ".hashbreak.potfile"
+
+    cmd = [
+        "hashcat",
+        "-m", str(mode),
+        "-a", "0",
+        "-D", "1",                    # force CPU-only (GPU hangs on Mali)
+        "-w", "3",                    # workload profile 3 (high)
+        "--force",                    # bypass GPU warnings
+        "--quiet",
+        "--potfile-path", str(potfile),
+        "--restore-disable",
+        str(hf),
+        wordlist_path,
+    ]
+
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=900)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+    # read result from potfile
+    if potfile.exists():
+        for line in potfile.read_text(errors="ignore").splitlines():
+            if line.startswith(hash_str + ":"):
+                return line.split(":", 1)[1]
+    return None
+
+
+
 class HashBreakModern:
     def __init__(self):
         self.results = []
@@ -1058,6 +1160,21 @@ class HashBreakModern:
                 return [w.strip() for w in f.readlines() if w.strip()]
         except FileNotFoundError:
             return self.create_default_wordlist()
+
+    def _get_wordlist_path(self):
+        """return path to the first available wordlist file, or None."""
+        candidates = [
+            str(Path.home() / "top1m.txt"),
+            str(Path.home() / "merged_ng.txt"),
+            str(Path.home() / "rockyou.txt"),
+            "/usr/share/wordlists/rockyou.txt",
+            str(Path.home() / "wordlist.txt"),
+        ]
+        for p in candidates:
+            pp = Path(p)
+            if pp.exists() and pp.stat().st_size > 1000:
+                return p
+        return None
 
     def create_default_wordlist(self):
         return ['password', '123456', '12345678', 'qwerty', 'abc123',
@@ -1294,6 +1411,17 @@ class HashBreakModern:
         hash_type = self.detect_hash_type(hash_str)
         if hash_type not in self.classic_lengths.values():
             return None
+
+        # hashcat backend — huge speedup if installed
+        if hashcat_available():
+            hc_mode = HASHCAT_MODE.get(hash_type)
+            if hc_mode is not None:
+                wl_path = self._get_wordlist_path()
+                if wl_path:
+                    print(f"  {C.DIM}hashcat backend · -m {hc_mode} · {Path(wl_path).name}{C.RESET}")
+                    result = hashcat_crack(hash_str, hc_mode, wl_path)
+                    if result:
+                        return result
         fn_name_map = {
             'MD5': 'md5', 'SHA1': 'sha1', 'SHA224': 'sha224',
             'SHA256': 'sha256', 'SHA384': 'sha384', 'SHA512': 'sha512',
@@ -2269,7 +2397,13 @@ class HashBreakModern:
         print(box_top(width))
         print(box_line(f"{C.BOLD}SYSTEM CHECK{C.RESET}", width, align='center'))
         print(box_mid(width))
-        for dep, ok in [('scrypt', SCRYPT_AVAILABLE), ('bcrypt', BCRYPT_AVAILABLE), ('requests', True)]:
+        deps = [
+            ('scrypt', SCRYPT_AVAILABLE),
+            ('bcrypt', BCRYPT_AVAILABLE),
+            ('requests', True),
+            ('hashcat (external)', hashcat_available()),
+        ]
+        for dep, ok in deps:
             mark = f"{C.BRIGHT_GREEN}✓{C.RESET}" if ok else f"{C.BRIGHT_RED}✗{C.RESET}"
             print(box_line(f"{mark} {dep}", width))
         print(box_mid(width))
