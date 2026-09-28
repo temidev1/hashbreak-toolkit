@@ -10,3 +10,4 @@ subdomains_*
 hashbreak_modern_*
 __pycache__/
 *.pyc
+!requirements.lock.txt
