@@ -14,13 +14,14 @@ Built by Maverick.
 - Subdomain enum: subfinder + httpx integration
 - Dir buster, hash generator, password strength, encoders
 
-## Install
+## ## Install
 
 **Android / Termux (primary platform):**
 
+    pkg update && pkg upgrade -y
+    pkg install python git -y
     git clone https://github.com/temidev1/hashbreak-toolkit.git
     cd hashbreak-toolkit
-    pkg install python git -y
     pip install -r requirements.txt
 
 **Other platforms:**
