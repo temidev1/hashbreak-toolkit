@@ -16,8 +16,25 @@ Built by Maverick.
 
 ## Install
 
+**Android / Termux (primary platform):**
+
+    git clone https://github.com/temidev1/hashbreak-toolkit.git
+    cd hashbreak-toolkit
     pkg install python git -y
     pip install -r requirements.txt
+
+**Other platforms:**
+
+The Python code is portable — it runs anywhere Python 3.10+ runs.
+
+    git clone https://github.com/temidev1/hashbreak-toolkit.git
+    cd hashbreak-toolkit
+    pip install -r requirements.txt
+
+- **iPhone / iPad:** iSH or a-Shell (unofficial, may be slow)
+- **Linux:** run directly with native Python 3.10+
+- **macOS:** run directly with native Python 3.10+
+- **Windows:** WSL, or native Python 3.10+
 
 For reproducible installs (exact versions tested by the author):
 
